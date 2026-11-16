@@ -16,6 +16,8 @@
 
 use std::fmt;
 
+pub mod svg;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Error {
     /// The header ended without a `Binary:` or `Values:` marker.
