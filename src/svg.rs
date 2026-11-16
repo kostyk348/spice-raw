@@ -73,20 +73,29 @@ pub fn render(plot: &Plot, options: &Options) -> Result<String, String> {
         x_max = x_max.max(*value);
     }
     let (mut y_min, mut y_max) = (f64::MAX, f64::MIN);
+    let mut valid = 0usize;
     for (_, values) in &series {
         for value in values {
-            if options.log_y && *value <= 0.0 {
+            if !value.is_finite() || (options.log_y && *value <= 0.0) {
                 continue;
             }
             y_min = y_min.min(*value);
             y_max = y_max.max(*value);
+            valid += 1;
         }
+    }
+    // `f64::MAX` and `f64::MIN` are both finite, so "nothing usable was collected" has to be
+    // detected by the sentinels crossing, not by an is_finite check — otherwise the axis labels
+    // come out as NaN and the curves are empty.
+    if valid == 0 {
+        return Err(if options.log_y {
+            "every selected value is non-positive, so a logarithmic axis is impossible".to_string()
+        } else {
+            "no finite value to draw".to_string()
+        });
     }
     if !x_min.is_finite() || !x_max.is_finite() || x_max <= x_min {
         x_max = x_min + 1.0;
-    }
-    if !y_min.is_finite() || !y_max.is_finite() {
-        return Err("every selected value is non-positive, so a logarithmic axis is impossible".to_string());
     }
     if options.log_y {
         y_min = y_min.log10();
@@ -164,9 +173,11 @@ pub fn render(plot: &Plot, options: &Options) -> Result<String, String> {
             }
             path.push_str(&format!("{:.2},{:.2}", sx(*x_value), sy(*value)));
         }
-        svg.push_str(&format!(
-            "<polyline fill=\"none\" stroke=\"{color}\" stroke-width=\"1.6\" points=\"{path}\"/>\n"
-        ));
+        if !path.is_empty() {
+            svg.push_str(&format!(
+                "<polyline fill=\"none\" stroke=\"{color}\" stroke-width=\"1.6\" points=\"{path}\"/>\n"
+            ));
+        }
         // Legend entry, top right, one line per series.
         let legend_y = margin_top + 14.0 + index as f64 * 16.0;
         svg.push_str(&format!(
