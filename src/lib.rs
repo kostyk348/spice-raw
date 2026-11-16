@@ -72,9 +72,12 @@ impl Plot {
     }
 
     /// Find a column by name, case-sensitively — the way the netlist spelled it.
-    pub fn column(&self, name: &str) -> Option<&[f64]> {
+    ///
+    /// The column is returned owned: a borrowed slice would have to point at a temporary, and a
+    /// viewer wants to hand the data around anyway.
+    pub fn column(&self, name: &str) -> Option<Vec<f64>> {
         let index = self.variables.iter().position(|variable| variable.name == name)?;
-        Some(&self.values.iter().map(|point| point[index]).collect::<Vec<_>>()[..])
+        self.column_at(index)
     }
 
     /// The column at a position, which is what a viewer needs: axis 0 is normally `time`.
@@ -321,7 +324,7 @@ mod tests {
     #[test]
     fn a_file_without_a_data_marker_says_so() {
         let bytes = header(1, &[("time", "time")], "").into_bytes();
-        assert_eq!(parse(&bytes), Err(Error::NoDataSection));
+        assert!(matches!(parse(&bytes), Err(Error::NoDataSection)));
     }
 
     #[test]
