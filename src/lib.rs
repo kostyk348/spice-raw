@@ -181,7 +181,11 @@ fn read_binary(
     let fast_prefix = if fast { 1 } else { 0 };
     for width in [8usize, 4] {
         let needed = (fast_prefix + points * variables * per_value) * width;
-        if payload.len() < needed {
+        // A payload must hold exactly one layout, plus at most a partial word of padding. Accepting
+        // a "close enough" length is how a truncated file gets read as floats and silently produces
+        // half the waveforms: a 16-byte payload for three doubles fits neither 24 nor 12, and that
+        // has to be an error, not a guess.
+        if payload.len() < needed || payload.len() - needed >= width {
             continue;
         }
         // Real data with a second time column is the common LTSpice shape; the flag names differ
