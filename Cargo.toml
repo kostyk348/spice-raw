@@ -1,0 +1,17 @@
+[package]
+name = "spice-raw"
+version = "0.1.0"
+edition = "2021"
+description = "Read SPICE waveform files (.raw) from LTspice and ngspice: header, variables, real and complex data, fastaccess layout"
+license = "MIT"
+repository = "https://github.com/kostyk348/spice-raw"
+
+[lib]
+name = "spice_raw"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rawread"
+path = "src/main.rs"
+
+[dependencies]
