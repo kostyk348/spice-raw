@@ -17,6 +17,7 @@ fn main() -> ExitCode {
     let column = args.iter().position(|arg| arg == "--column").and_then(|at| args.get(at + 1)).cloned();
     let csv = args.iter().any(|arg| arg == "--csv");
     let svg_out = args.iter().position(|arg| arg == "--svg").and_then(|at| args.get(at + 1)).cloned();
+    let log_y = args.iter().any(|arg| arg == "--log");
 
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
@@ -34,7 +35,7 @@ fn main() -> ExitCode {
     };
 
     if let Some(target) = svg_out {
-        let options = spice_raw::svg::Options { x: column.clone(), series: Vec::new(), ..spice_raw::svg::Options::default() };
+        let options = spice_raw::svg::Options { x: column.clone(), series: Vec::new(), log_y, ..spice_raw::svg::Options::default() };
         match spice_raw::svg::render(&plot, &options) {
             Ok(svg) => {
                 if let Err(error) = std::fs::write(&target, svg) {

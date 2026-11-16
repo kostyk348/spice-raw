@@ -195,7 +195,7 @@ fn read_binary(
         let mut values = vec![vec![0.0; variables]; points];
         let mut imaginary = vec![vec![0.0; variables]; points];
         let mut cursor = 0usize;
-        let mut read = |cursor: &mut usize| -> f64 {
+        let read = |cursor: &mut usize| -> f64 {
             let value = if width == 8 {
                 let mut buffer = [0u8; 8];
                 buffer.copy_from_slice(&payload[*cursor..*cursor + 8]);

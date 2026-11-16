@@ -258,4 +258,22 @@ mod tests {
         plot.values = plot.values.iter().map(|row| vec![row[0]]).collect();
         assert!(render(&plot, &Options::default()).is_err());
     }
+
+    #[test]
+    fn a_logarithmic_axis_skips_non_positive_points_instead_of_drawing_nan() {
+        let mut plot = sample();
+        // A curve that crosses zero: the log axis must drop the bad points, not emit NaN.
+        plot.values[0][1] = 0.0;
+        let svg = render(&plot, &Options { log_y: true, ..Options::default() }).expect("render");
+        assert!(svg.contains("<polyline"), "the curve is still drawn");
+        assert!(!svg.contains("NaN") && !svg.contains("nan"), "no NaN in the output");
+    }
+
+    #[test]
+    fn a_log_axis_of_nothing_positive_is_an_error() {
+        let mut plot = sample();
+        plot.values = plot.values.iter().map(|row| vec![0.0, 0.0, 0.0].into_iter().enumerate().map(|(at, _)| if at == 0 { row[0] } else { 0.0 }).collect()).collect();
+        let error = render(&plot, &Options { log_y: true, ..Options::default() }).unwrap_err();
+        assert!(error.contains("logarithmic"), "{error}");
+    }
 }
