@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Lints
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --release
+      # The reader is checked against the format, but a file written by a real simulator is the
+      # only thing that proves the layout guesses: the fixture is CRLF, like LTspice writes.
+      - name: Read the fixture and render it
+        run: |
+          cargo run --release --quiet -- examples/fixtures/step-rlc.raw --csv > out.csv
+          cargo run --release --quiet -- examples/fixtures/step-rlc.raw --svg out.svg --column time
+      - name: The fixture must not collapse to zeros
+        shell: bash
+        run: |
+          set -eu
+          points=$(wc -l < out.csv)
+          echo "rows (header + points): $points"
+          [ "$points" -eq 202 ] || { echo "expected 201 points + header"; exit 1; }
+          # Second column, last point: the ringing has settled near 5.68 V, and a reader that
+          # drops variables would report 0 here.
+          tail -1 out.csv | awk -F, '{ if ($2 < 5.6 || $2 > 5.8) { print "v(out) out of range: " $2; exit 1 } }'
+          grep -q "voltage (V)" out.svg || { echo "axis label missing"; exit 1; }
+          echo "fixture reads as expected"
