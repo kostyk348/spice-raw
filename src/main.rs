@@ -14,9 +14,17 @@ fn main() -> ExitCode {
         return ExitCode::SUCCESS;
     }
     let path = &args[0];
-    let column = args.iter().position(|arg| arg == "--column").and_then(|at| args.get(at + 1)).cloned();
+    let column = args
+        .iter()
+        .position(|arg| arg == "--column")
+        .and_then(|at| args.get(at + 1))
+        .cloned();
     let csv = args.iter().any(|arg| arg == "--csv");
-    let svg_out = args.iter().position(|arg| arg == "--svg").and_then(|at| args.get(at + 1)).cloned();
+    let svg_out = args
+        .iter()
+        .position(|arg| arg == "--svg")
+        .and_then(|at| args.get(at + 1))
+        .cloned();
     let log_y = args.iter().any(|arg| arg == "--log");
 
     let bytes = match std::fs::read(path) {
@@ -35,7 +43,12 @@ fn main() -> ExitCode {
     };
 
     if let Some(target) = svg_out {
-        let options = spice_raw::svg::Options { x: column.clone(), series: Vec::new(), log_y, ..spice_raw::svg::Options::default() };
+        let options = spice_raw::svg::Options {
+            x: column.clone(),
+            series: Vec::new(),
+            log_y,
+            ..spice_raw::svg::Options::default()
+        };
         match spice_raw::svg::render(&plot, &options) {
             Ok(svg) => {
                 if let Err(error) = std::fs::write(&target, svg) {
@@ -55,8 +68,15 @@ fn main() -> ExitCode {
     match column {
         Some(name) => {
             let Some(values) = plot.column(&name) else {
-                let known: Vec<&str> = plot.variables.iter().map(|variable| variable.name.as_str()).collect();
-                eprintln!("rawread: no column {name:?}; this plot has {}", known.join(", "));
+                let known: Vec<&str> = plot
+                    .variables
+                    .iter()
+                    .map(|variable| variable.name.as_str())
+                    .collect();
+                eprintln!(
+                    "rawread: no column {name:?}; this plot has {}",
+                    known.join(", ")
+                );
                 return ExitCode::FAILURE;
             };
             for value in values {
@@ -65,7 +85,11 @@ fn main() -> ExitCode {
         }
         None => {
             if csv {
-                let header: Vec<&str> = plot.variables.iter().map(|variable| variable.name.as_str()).collect();
+                let header: Vec<&str> = plot
+                    .variables
+                    .iter()
+                    .map(|variable| variable.name.as_str())
+                    .collect();
                 println!("{}", header.join(","));
                 for point in 0..plot.points() {
                     let row: Vec<String> = (0..plot.variables.len())
@@ -84,7 +108,12 @@ fn main() -> ExitCode {
                     let head: Vec<String> = (0..plot.points().min(3))
                         .map(|point| format!("{}", plot.values[point][variable.index]))
                         .collect();
-                    println!("  {:<24} {:<10} {}", variable.name, variable.kind, head.join("  "));
+                    println!(
+                        "  {:<24} {:<10} {}",
+                        variable.name,
+                        variable.kind,
+                        head.join("  ")
+                    );
                 }
             }
         }

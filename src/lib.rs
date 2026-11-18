@@ -35,7 +35,9 @@ impl fmt::Display for Error {
         match self {
             Error::NoDataSection => write!(f, "the header has no Binary: or Values: section"),
             Error::BadHeader(what) => write!(f, "bad header: {what}"),
-            Error::Truncated { expected, got } => write!(f, "expected {expected} bytes of data, found {got}"),
+            Error::Truncated { expected, got } => {
+                write!(f, "expected {expected} bytes of data, found {got}")
+            }
             Error::Unsupported(what) => write!(f, "unsupported: {what}"),
         }
     }
@@ -78,7 +80,10 @@ impl Plot {
     /// The column is returned owned: a borrowed slice would have to point at a temporary, and a
     /// viewer wants to hand the data around anyway.
     pub fn column(&self, name: &str) -> Option<Vec<f64>> {
-        let index = self.variables.iter().position(|variable| variable.name == name)?;
+        let index = self
+            .variables
+            .iter()
+            .position(|variable| variable.name == name)?;
         self.column_at(index)
     }
 
@@ -106,8 +111,14 @@ pub fn parse(bytes: &[u8]) -> Result<Plot, Error> {
                 continue;
             }
             let mut parts = line.split_whitespace();
-            let index = parts.next().and_then(|text| text.parse::<usize>().ok()).ok_or_else(|| Error::BadHeader(format!("variable index in {line:?}")))?;
-            let name = parts.next().ok_or_else(|| Error::BadHeader(format!("variable name in {line:?}")))?.to_string();
+            let index = parts
+                .next()
+                .and_then(|text| text.parse::<usize>().ok())
+                .ok_or_else(|| Error::BadHeader(format!("variable index in {line:?}")))?;
+            let name = parts
+                .next()
+                .ok_or_else(|| Error::BadHeader(format!("variable name in {line:?}")))?
+                .to_string();
             let kind = parts.next().unwrap_or("unknown").to_string();
             plot.variables.push(Variable { index, name, kind });
             continue;
@@ -121,9 +132,15 @@ pub fn parse(bytes: &[u8]) -> Result<Plot, Error> {
         } else if let Some(rest) = line.strip_prefix("Flags:") {
             plot.flags = rest.split_whitespace().map(str::to_string).collect();
         } else if let Some(rest) = line.strip_prefix("No. Variables:") {
-            expected_variables = rest.trim().parse().map_err(|_| Error::BadHeader(format!("No. Variables: {rest:?}")))?;
+            expected_variables = rest
+                .trim()
+                .parse()
+                .map_err(|_| Error::BadHeader(format!("No. Variables: {rest:?}")))?;
         } else if let Some(rest) = line.strip_prefix("No. Points:") {
-            expected_points = rest.trim().parse().map_err(|_| Error::BadHeader(format!("No. Points: {rest:?}")))?;
+            expected_points = rest
+                .trim()
+                .parse()
+                .map_err(|_| Error::BadHeader(format!("No. Points: {rest:?}")))?;
         } else if line.starts_with("Variables:") {
             in_variables = true;
         }
@@ -142,7 +159,14 @@ pub fn parse(bytes: &[u8]) -> Result<Plot, Error> {
     let complex = plot.flags.iter().any(|flag| flag == "complex");
     let fast = plot.flags.iter().any(|flag| flag == "fastaccess");
     match marker {
-        Marker::Binary => read_binary(&mut plot, payload, expected_points, expected_variables, complex, fast),
+        Marker::Binary => read_binary(
+            &mut plot,
+            payload,
+            expected_points,
+            expected_variables,
+            complex,
+            fast,
+        ),
         Marker::Ascii => read_ascii(&mut plot, payload, expected_points, expected_variables),
     }?;
     Ok(plot)
@@ -156,9 +180,17 @@ enum Marker {
 
 /// Split the file into the ASCII header, which data section follows, and the payload.
 fn split_at_data(bytes: &[u8]) -> Result<(String, Marker, &[u8]), Error> {
-    for (marker_text, marker) in [("Binary:\n", Marker::Binary), ("Values:\n", Marker::Ascii)] {
+    // The marker is matched without its line ending: LTspice writes CRLF, and a file whose data
+    // section starts with `Values:\r\n` used to be refused as having no data section at all.
+    for (marker_text, marker) in [("Binary:", Marker::Binary), ("Values:", Marker::Ascii)] {
         if let Some(position) = find(bytes, marker_text.as_bytes()) {
-            let end = position + marker_text.len();
+            let mut end = position + marker_text.len();
+            if bytes.get(end) == Some(&b'\r') {
+                end += 1;
+            }
+            if bytes.get(end) == Some(&b'\n') {
+                end += 1;
+            }
             let header = String::from_utf8_lossy(&bytes[..position]).into_owned();
             return Ok((header, marker, &bytes[end..]));
         }
@@ -167,7 +199,9 @@ fn split_at_data(bytes: &[u8]) -> Result<(String, Marker, &[u8]), Error> {
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack.windows(needle.len()).position(|window| window == needle)
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Which layout and width the payload uses, decided by trying the candidates.
@@ -238,20 +272,54 @@ fn read_binary(
     })
 }
 
-fn read_ascii(plot: &mut Plot, payload: &[u8], points: usize, variables: usize) -> Result<(), Error> {
-    let text = String::from_utf8_lossy(payload);
+fn read_ascii(
+    plot: &mut Plot,
+    payload: &[u8],
+    points: usize,
+    variables: usize,
+) -> Result<(), Error> {
+    // LTspice and ngspice write ASCII data as one running token stream: a new point starts with a
+    // line that carries the point index and the value of variable 0, every following line carries
+    // one bare value. There are no blank lines between points, so splitting on `\n\n` (as this
+    // reader used to) put the whole payload into one chunk — the first point came out right and
+    // every other point stayed zero. CRLF is normalised first for the same reason.
+    let text = String::from_utf8_lossy(payload).replace("\r\n", "\n");
     let mut values = vec![vec![0.0; variables]; points];
-    for (point, chunk) in text.split("\n\n").filter(|chunk| !chunk.trim().is_empty()).take(points).enumerate() {
-        for line in chunk.lines() {
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
+    let budget = points.saturating_mul(variables);
+    let mut point = 0usize;
+    let mut variable = 0usize;
+    let mut filled = 0usize;
+    for line in text.lines() {
+        // Loop is bounded by the declared size: a malformed file cannot make this run forever.
+        if filled >= budget || point >= points {
+            break;
+        }
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.is_empty() {
+            continue;
+        }
+        let carries_point_index = parts.len() > 1 && parts[0].parse::<usize>().is_ok();
+        if carries_point_index && variable > 0 {
+            point += 1;
+            variable = 0;
+            if point >= points {
+                break;
             }
-            let mut parts = line.split_whitespace();
-            let index = parts.next().and_then(|text| text.parse::<usize>().ok());
-            let Some(index) = index.filter(|index| *index < variables) else { continue };
-            let Some(value) = parts.next().and_then(|text| text.parse::<f64>().ok()) else { continue };
-            values[point][index] = value;
+        }
+        let tokens = if carries_point_index {
+            &parts[1..]
+        } else {
+            &parts[..]
+        };
+        for token in tokens {
+            if variable >= variables {
+                break;
+            }
+            if let Ok(value) = token.parse::<f64>() {
+                values[point][variable] = value;
+            }
+            variable += 1;
+            filled += 1;
         }
     }
     plot.values = values;
@@ -278,7 +346,10 @@ mod tests {
     }
 
     fn doubles(values: &[f64]) -> Vec<u8> {
-        values.iter().flat_map(|value| value.to_le_bytes()).collect()
+        values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect()
     }
 
     #[test]
@@ -298,7 +369,8 @@ mod tests {
     #[test]
     fn reads_a_variable_major_fastaccess_plot() {
         // `fastaccess` writes a leading count, then one whole column after another.
-        let mut bytes = header(2, &[("time", "time"), ("V(in)", "voltage")], "fastaccess").into_bytes();
+        let mut bytes =
+            header(2, &[("time", "time"), ("V(in)", "voltage")], "fastaccess").into_bytes();
         bytes.extend_from_slice(b"Binary:\n");
         bytes.extend_from_slice(&doubles(&[2.0, 0.0, 1e-3, 5.0, 5.0]));
         let plot = parse(&bytes).expect("parse");
@@ -308,7 +380,12 @@ mod tests {
 
     #[test]
     fn reads_a_complex_plot_and_keeps_both_parts() {
-        let mut bytes = header(2, &[("frequency", "frequency"), ("V(out)", "voltage")], "complex").into_bytes();
+        let mut bytes = header(
+            2,
+            &[("frequency", "frequency"), ("V(out)", "voltage")],
+            "complex",
+        )
+        .into_bytes();
         bytes.extend_from_slice(b"Binary:\n");
         // real/imag pairs: (1, 0) at 1 Hz, (0.5, -0.5) at 2 Hz, then the same for V(out).
         bytes.extend_from_slice(&doubles(&[1.0, 0.0, 1.0, 0.0, 2.0, 0.0, 0.5, -0.5]));
@@ -333,6 +410,48 @@ mod tests {
         assert!(matches!(parse(&bytes), Err(Error::NoDataSection)));
     }
 
+    /// LTspice writes CRLF. Such a file used to be refused with `NoDataSection` (the marker was
+    /// searched as `Values:\n`), and even with the header read, the blank line between points is
+    /// `\r\n\r\n` — which does not contain `\n\n` — so every point collapsed into the first.
+    #[test]
+    fn a_crlf_ascii_plot_reads_like_an_lf_one() {
+        let lf = "Title: t\nDate: d\nPlotname: Transient Analysis\nFlags: real\n\
+                  No. Variables: 2\nNo. Points: 3\nVariables:\n\t0\ttime\ttime\n\t1\tv(out)\tvoltage\n\
+                  Values:\n0\t0.0\n\t0.0\n\n1\t1.0\n\t2.5\n\n2\t2.0\n\t5.0\n";
+        let crlf = lf.replace('\n', "\r\n");
+        for (label, text) in [("LF", lf.to_string()), ("CRLF", crlf)] {
+            let plot = parse(text.as_bytes()).unwrap_or_else(|error| panic!("{label}: {error}"));
+            assert_eq!(plot.points(), 3, "{label}: points");
+            assert_eq!(
+                plot.column("time"),
+                Some(vec![0.0, 1.0, 2.0]),
+                "{label}: time column"
+            );
+            assert_eq!(
+                plot.column("v(out)"),
+                Some(vec![0.0, 2.5, 5.0]),
+                "{label}: v(out) column"
+            );
+        }
+    }
+
+    /// LTspice and ngspice put the point index on the first line of the point only. The reader
+    /// used to require it on every line, so all variables after the first were silently dropped
+    /// and the plot looked shifted by a column.
+    #[test]
+    fn an_ascii_plot_with_the_index_written_once_per_point_keeps_every_column() {
+        let text = "Title: t\nPlotname: Transient Analysis\nFlags: real\nNo. Variables: 3\n\
+                    No. Points: 2\nVariables:\n\t0\ttime\ttime\n\t1\tv(out)\tvoltage\n\
+                    \t2\tv(in)\tvoltage\nValues:\n\
+                    0\t0.000000000000000e+00\n\t0.000000000000000e+00\n\t5.000000000000000e+00\n\n\
+                    1\t1.000000000000000e-03\n\t4.323323583816937e+00\n\t5.000000000000000e+00\n";
+        let plot = parse(text.as_bytes()).expect("parse");
+        assert_eq!(plot.points(), 2);
+        assert_eq!(plot.column("time"), Some(vec![0.0, 1e-3]));
+        assert_eq!(plot.column("v(out)"), Some(vec![0.0, 4.323323583816937]));
+        assert_eq!(plot.column("v(in)"), Some(vec![5.0, 5.0]));
+    }
+
     #[test]
     fn column_names_are_matched_as_the_netlist_spelled_them() {
         let mut bytes = header(1, &[("time", "time"), ("I(R1)", "current")], "").into_bytes();
@@ -340,6 +459,9 @@ mod tests {
         bytes.extend_from_slice(&doubles(&[0.0, -0.25]));
         let plot = parse(&bytes).expect("parse");
         assert!(plot.column("I(R1)").is_some());
-        assert!(plot.column("i(r1)").is_none(), "names are case-sensitive, like SPICE itself");
+        assert!(
+            plot.column("i(r1)").is_none(),
+            "names are case-sensitive, like SPICE itself"
+        );
     }
 }

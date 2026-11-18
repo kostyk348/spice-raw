@@ -21,11 +21,19 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Self { width: 960.0, height: 540.0, x: None, series: Vec::new(), log_y: false }
+        Self {
+            width: 960.0,
+            height: 540.0,
+            x: None,
+            series: Vec::new(),
+            log_y: false,
+        }
     }
 }
 
-const COLORS: [&str; 8] = ["#6ab7ff", "#7ee2b8", "#ffb86b", "#ff7eb6", "#c4a7ff", "#8fe388", "#7fd8d8", "#f2f2a1"];
+const COLORS: [&str; 8] = [
+    "#6ab7ff", "#7ee2b8", "#ffb86b", "#ff7eb6", "#c4a7ff", "#8fe388", "#7fd8d8", "#f2f2a1",
+];
 
 /// Render one plot into a self-contained SVG document.
 pub fn render(plot: &Plot, options: &Options) -> Result<String, String> {
@@ -45,13 +53,20 @@ pub fn render(plot: &Plot, options: &Options) -> Result<String, String> {
     let series: Vec<(String, Vec<f64>)> = if options.series.is_empty() {
         (0..plot.variables.len())
             .filter(|index| *index != x_index)
-            .filter_map(|index| plot.column_at(index).map(|values| (plot.variables[index].name.clone(), values)))
+            .filter_map(|index| {
+                plot.column_at(index)
+                    .map(|values| (plot.variables[index].name.clone(), values))
+            })
             .collect()
     } else {
         options
             .series
             .iter()
-            .map(|name| plot.column(name).map(|values| (name.clone(), values)).ok_or_else(|| format!("no column named {name:?}")))
+            .map(|name| {
+                plot.column(name)
+                    .map(|values| (name.clone(), values))
+                    .ok_or_else(|| format!("no column named {name:?}"))
+            })
             .collect::<Result<Vec<_>, _>>()?
     };
     if series.is_empty() {
@@ -192,12 +207,55 @@ pub fn render(plot: &Plot, options: &Options) -> Result<String, String> {
         ));
     }
 
+    // Axis titles. Units follow SPICE's convention for the variable kinds; a column of an unknown
+    // kind keeps its bare name rather than inventing a unit.
+    let unit_for = |kind: &str| match kind {
+        "time" => Some("s"),
+        "voltage" => Some("V"),
+        "current" => Some("A"),
+        "frequency" => Some("Hz"),
+        _ => None,
+    };
+    let x_variable = plot.variables.get(x_index);
+    let x_label = x_variable.map(|variable| match unit_for(&variable.kind) {
+        Some(unit) => format!("{} ({unit})", variable.name),
+        None => variable.name.clone(),
+    });
+    let mut kinds = series.iter().filter_map(|(name, _)| {
+        plot.variables
+            .iter()
+            .find(|variable| &variable.name == name)
+            .map(|variable| variable.kind.as_str())
+    });
+    let y_label = kinds.next().and_then(|first| {
+        let same = kinds.all(|kind| kind == first);
+        match (same, unit_for(first)) {
+            (true, Some(unit)) => Some(format!("{first} ({unit})")),
+            _ => None,
+        }
+    });
+    if let Some(label) = y_label {
+        svg.push_str(&format!(
+            "<text x=\"18\" y=\"{mid:.1}\" fill=\"#96a1b0\" font-family=\"sans-serif\" font-size=\"12\" text-anchor=\"middle\" transform=\"rotate(-90 18 {mid:.1})\">{}</text>\n",
+            escape(&label),
+            mid = margin_top + inner_height / 2.0
+        ));
+    }
+
     svg.push_str(&format!(
         "<text x=\"{:.1}\" y=\"{height:.0}\" fill=\"#96a1b0\" font-family=\"monospace\" font-size=\"11\" text-anchor=\"middle\">{}  ·  {} points</text>\n",
         margin_left + inner_width / 2.0,
         escape(plot.variables.get(x_index).map(|variable| variable.name.as_str()).unwrap_or("x")),
         plot.points()
     ));
+    if let Some(label) = x_label {
+        svg.push_str(&format!(
+            "<text x=\"{:.1}\" y=\"{:.0}\" fill=\"#d0d7de\" font-family=\"sans-serif\" font-size=\"12\" text-anchor=\"middle\">{}</text>\n",
+            margin_left + inner_width / 2.0,
+            height - 6.0,
+            escape(&label)
+        ));
+    }
     svg.push_str("</svg>\n");
     Ok(svg)
 }
@@ -220,7 +278,9 @@ fn number(value: f64) -> String {
 }
 
 fn escape(text: &str) -> String {
-    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -234,11 +294,27 @@ mod tests {
             flags: vec!["real".to_string()],
             plotname: "Transient Analysis".to_string(),
             variables: vec![
-                crate::Variable { index: 0, name: "time".into(), kind: "time".into() },
-                crate::Variable { index: 1, name: "V(out)".into(), kind: "voltage".into() },
-                crate::Variable { index: 2, name: "V(in)".into(), kind: "voltage".into() },
+                crate::Variable {
+                    index: 0,
+                    name: "time".into(),
+                    kind: "time".into(),
+                },
+                crate::Variable {
+                    index: 1,
+                    name: "V(out)".into(),
+                    kind: "voltage".into(),
+                },
+                crate::Variable {
+                    index: 2,
+                    name: "V(in)".into(),
+                    kind: "voltage".into(),
+                },
             ],
-            values: vec![vec![0.0, 0.0, 0.0], vec![1e-3, 0.63, 1.0], vec![2e-3, 0.86, 1.0]],
+            values: vec![
+                vec![0.0, 0.0, 0.0],
+                vec![1e-3, 0.63, 1.0],
+                vec![2e-3, 0.86, 1.0],
+            ],
             imaginary: Vec::new(),
         }
     }
@@ -248,16 +324,29 @@ mod tests {
         let svg = render(&sample(), &Options::default()).expect("render");
         assert!(svg.starts_with("<?xml"));
         assert!(svg.contains("<svg "));
-        assert_eq!(svg.matches("<polyline").count(), 2, "two series, two curves");
+        assert_eq!(
+            svg.matches("<polyline").count(),
+            2,
+            "two series, two curves"
+        );
         assert!(svg.contains("V(out)") && svg.contains("V(in)"));
-        assert!(svg.contains("Transient Analysis"), "the plot name is in the title");
-        assert!(svg.contains("&amp;"), "an ampersand in the title must be escaped");
+        assert!(
+            svg.contains("Transient Analysis"),
+            "the plot name is in the title"
+        );
+        assert!(
+            svg.contains("&amp;"),
+            "an ampersand in the title must be escaped"
+        );
         assert!(svg.trim_end().ends_with("</svg>"));
     }
 
     #[test]
     fn a_missing_column_is_named_in_the_error() {
-        let options = Options { series: vec!["V(nope)".into()], ..Options::default() };
+        let options = Options {
+            series: vec!["V(nope)".into()],
+            ..Options::default()
+        };
         let error = render(&sample(), &options).unwrap_err();
         assert!(error.contains("V(nope)"), "{error}");
     }
@@ -275,16 +364,43 @@ mod tests {
         let mut plot = sample();
         // A curve that crosses zero: the log axis must drop the bad points, not emit NaN.
         plot.values[0][1] = 0.0;
-        let svg = render(&plot, &Options { log_y: true, ..Options::default() }).expect("render");
+        let svg = render(
+            &plot,
+            &Options {
+                log_y: true,
+                ..Options::default()
+            },
+        )
+        .expect("render");
         assert!(svg.contains("<polyline"), "the curve is still drawn");
-        assert!(!svg.contains("NaN") && !svg.contains("nan"), "no NaN in the output");
+        assert!(
+            !svg.contains("NaN") && !svg.contains("nan"),
+            "no NaN in the output"
+        );
     }
 
     #[test]
     fn a_log_axis_of_nothing_positive_is_an_error() {
         let mut plot = sample();
-        plot.values = plot.values.iter().map(|row| vec![0.0, 0.0, 0.0].into_iter().enumerate().map(|(at, _)| if at == 0 { row[0] } else { 0.0 }).collect()).collect();
-        let error = render(&plot, &Options { log_y: true, ..Options::default() }).unwrap_err();
+        plot.values = plot
+            .values
+            .iter()
+            .map(|row| {
+                vec![0.0, 0.0, 0.0]
+                    .into_iter()
+                    .enumerate()
+                    .map(|(at, _)| if at == 0 { row[0] } else { 0.0 })
+                    .collect()
+            })
+            .collect();
+        let error = render(
+            &plot,
+            &Options {
+                log_y: true,
+                ..Options::default()
+            },
+        )
+        .unwrap_err();
         assert!(error.contains("logarithmic"), "{error}");
     }
 }

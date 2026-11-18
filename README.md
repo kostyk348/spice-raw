@@ -15,6 +15,16 @@ foundation for a viewer that does not care who produced the data.
 - the `fastaccess` layout, where data is stored variable-major instead of point-major;
 - ASCII (`Values:`) plots.
 
+![Отрисовка .raw в SVG: переходный процесс RLC-звена](docs/waveform.svg)
+
+Переходный процесс недодемпфированного RLC-звена (ζ = 0.2, ωn = 2000 рад/с), прочитанный из
+ASCII `.raw` и нарисованный самим `rawread` — картинка в README это результат команды, а не
+скриншот из LTspice:
+
+```bash
+rawread examples/fixtures/step-rlc.raw --svg docs/waveform.svg --column time
+```
+
 ## Use
 
 ```console
@@ -38,10 +48,18 @@ let vout = plot.column("V(out)").unwrap();
 
 ## Tests
 
-Six tests, no fixtures on disk: the files are built byte by byte in the tests, so the parser is
-checked against the format rather than against one saved sample — point-major doubles, variable-major
-`fastaccess`, complex pairs, truncation, a header with no data section, and case-sensitive column
-names.
+Thirteen tests, no fixtures on disk: the files are built byte by byte in the tests, so the parser
+is checked against the format rather than against one saved sample — point-major doubles,
+variable-major `fastaccess`, complex pairs, truncation, a header with no data section,
+case-sensitive column names, and two regressions found while writing the README plot:
+
+- **CRLF before the data marker** — the marker was searched as `Values:\n`, so a file written by
+  LTspice (which uses CRLF) was refused with "the header has no Binary: or Values: section".
+- **ASCII payload split on a blank line** — LTspice and ngspice write one running token stream with
+  no blank lines between points, so every point after the first stayed zero and only the first
+  column of the first point was right. The reader now walks the stream and starts a new point at a
+  line that carries the point index, bounded by `No. Points × No. Variables` so a damaged file
+  cannot make it spin.
 
 ## Why a caller might want this
 
